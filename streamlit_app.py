@@ -1,121 +1,131 @@
 import streamlit as st
 import pandas as pd
+import folium
+from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 import time
 
-st.set_page_config(page_title="Asepeyo Batch Geocoder", page_icon="📍", layout="wide")
+# --- 1. Page Configuration ---
+st.set_page_config(page_title="Asepeyo Net Zero Map", layout="wide")
+st.title("🏥 Asepeyo Net Zero: Infrastructure & Supply Map")
+st.markdown("Upload your raw Electricidad CSV. The app will automatically find the centers and build your interactive dashboard.")
 
-st.title("📍 Asepeyo Batch Geocoder")
-st.markdown("Upload your electricity/supply CSV, and this tool will automatically find the Latitude and Longitude for every center.")
-
-# --- 1. File Upload ---
-uploaded_file = st.file_uploader("Upload your CSV or Excel file", type=['csv', 'xlsx'])
+# --- 2. Data Upload & Smart Processing ---
+uploaded_file = st.file_uploader("Upload your 'Electricidad...csv' file here", type=['csv'])
 
 if uploaded_file is not None:
-    # --- 2. Data Loading & Cleaning ---
-    # Your specific CSV has 2 empty rows at the top before the real header
-    skip_rows = st.number_input("Rows to skip at top of file (Set to 2 for your Electricidad CSV)", min_value=0, value=2)
+    # Read the file, skipping the two blank title rows at the top
+    df = pd.read_csv(uploaded_file, skiprows=2)
     
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file, skiprows=skip_rows)
-        else:
-            df = pd.read_excel(uploaded_file, skiprows=skip_rows)
+    # We only want rows that are actually centers (drop empty rows)
+    df = df.dropna(subset=['Centre'])
+    
+    # Create the "Smart Search" string to bypass messy street addresses
+    # Format: "Asepeyo [Center Name], [Province], Spain"
+    df['Smart_Address'] = "Asepeyo " + df['Centre'].astype(str) + ", " + df['Provincia'].astype(str) + ", Spain"
+    
+    # Add dummy columns for the extra data you requested (since they aren't in the Electricidad file)
+    # You can replace these with real data merges later
+    if 'Energy_Rating' not in df.columns:
+        df['Energy_Rating'] = 'Pending Audit'
+    if 'Dist_Elec' not in df.columns:
+        df['Dist_Elec'] = 'Unknown (Check Bill)'
+    if 'Dist_Gas' not in df.columns:
+        df['Dist_Gas'] = 'Unknown (Check Bill)'
+        
+    st.success(f"Loaded {len(df)} centers. Ready to build map!")
+
+    # --- 3. Geocoding Engine (Runs only once and saves to session state) ---
+    if 'geocoded_data' not in st.session_state:
+        if st.button("🚀 Initialize Map Coordinates (Takes ~2 minutes)"):
+            geolocator = Nominatim(user_agent="asepeyo_dashboard_internal")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             
-        st.success("File loaded successfully!")
-        st.write("Preview of your data:")
-        st.dataframe(df.head(3))
+            latitudes = []
+            longitudes = []
+            
+            for index, row in df.iterrows():
+                try:
+                    # Search using our clean "Smart Address"
+                    location = geolocator.geocode(row['Smart_Address'], timeout=5)
+                    if location:
+                        latitudes.append(location.latitude)
+                        longitudes.append(location.longitude)
+                    else:
+                        # Fallback: Just search "Asepeyo, [Province], Spain" if center name fails
+                        fallback = f"Asepeyo, {row['Provincia']}, Spain"
+                        loc_fallback = geolocator.geocode(fallback, timeout=5)
+                        latitudes.append(loc_fallback.latitude if loc_fallback else None)
+                        longitudes.append(loc_fallback.longitude if loc_fallback else None)
+                except:
+                    latitudes.append(None)
+                    longitudes.append(None)
+                
+                time.sleep(1) # Mandatory pause for free map server
+                progress = len(latitudes) / len(df)
+                progress_bar.progress(progress)
+                status_text.text(f"Mapping centers... {len(latitudes)}/{len(df)}")
+            
+            df['Latitude'] = latitudes
+            df['Longitude'] = longitudes
+            st.session_state['geocoded_data'] = df
+            st.rerun()
+
+    # --- 4. Interactive Dashboard (Renders after geocoding is done) ---
+    if 'geocoded_data' in st.session_state:
+        map_df = st.session_state['geocoded_data']
         
-        # --- 3. Address Configuration ---
-        st.subheader("⚙️ Configure Address Format")
-        st.markdown("Select the columns that make up the full address. The tool will combine them.")
+        # Filters
+        st.sidebar.header("🔍 Filter Centers")
+        estado_filter = st.sidebar.multiselect("Estado", map_df['Estado'].dropna().unique(), default=["Alta"])
+        prov_filter = st.sidebar.multiselect("Provincia", map_df['Provincia'].dropna().unique())
         
-        # Try to auto-detect columns based on the Asepeyo file structure
-        all_columns = df.columns.tolist()
-        default_cols = [col for col in ['Dirección Suministro', 'CP', 'Provincia'] if col in all_columns]
+        # Apply Filters
+        filtered_df = map_df.copy()
+        if estado_filter:
+            filtered_df = filtered_df[filtered_df['Estado'].isin(estado_filter)]
+        if prov_filter:
+            filtered_df = filtered_df[filtered_df['Provincia'].isin(prov_filter)]
+
+        # Drop rows that still couldn't be found
+        valid_map_data = filtered_df.dropna(subset=['Latitude', 'Longitude'])
         
-        address_columns = st.multiselect(
-            "Select columns to build the address:",
-            options=all_columns,
-            default=default_cols
+        st.subheader(f"🗺️ Map View ({len(valid_map_data)} Centers)")
+        
+        # Draw Map
+        m = folium.Map(location=[40.4168, -3.7038], zoom_start=6, tiles="CartoDB positron")
+        
+        for idx, row in valid_map_data.iterrows():
+            popup_html = f"""
+            <div style="font-family: Arial; min-width: 250px;">
+                <h4 style="color:#004b87; margin-bottom:5px;">{row['Centre']}</h4>
+                <b>CUPS:</b> {row['Name']}<br>
+                <b>Estado:</b> {row['Estado']}<br>
+                <b>Energy Rating:</b> {row['Energy_Rating']}<br>
+                <b>Elec. Dist.:</b> {row['Dist_Elec']}<br>
+                <b>Gas Dist.:</b> {row['Dist_Gas']}<br>
+                <hr style="margin: 5px 0;">
+                <a href="#" target="_blank">View Audit Report</a> | <a href="#" target="_blank">BMS Logs</a>
+            </div>
+            """
+            folium.Marker(
+                location=[row['Latitude'], row['Longitude']],
+                popup=folium.Popup(popup_html, max_width=300),
+                tooltip=row['Centre'],
+                icon=folium.Icon(color="blue", icon="building", prefix="fa")
+            ).add_to(m)
+            
+        st_folium(m, width=1200, height=600, returned_objects=[])
+        
+        # Data Table and Export
+        st.subheader("📊 Exportable Data Table")
+        st.markdown("Filter the table above, then copy/paste or download the resulting data.")
+        st.dataframe(filtered_df[['Name', 'Centre', 'Estado', 'Provincia', 'Dirección Suministro', 'Energy_Rating']], use_container_width=True)
+        
+        st.download_button(
+            label="⬇️ Download Dashboard Data as CSV",
+            data=filtered_df.to_csv(index=False).encode('utf-8'),
+            file_name='Asepeyo_Dashboard_Export.csv',
+            mime='text/csv'
         )
-        
-        country_suffix = st.text_input("Add a fixed suffix to help the map engine find it:", value="Spain")
-        
-        if address_columns:
-            # Show an example of how the address will look
-            sample_row = df.iloc[0].fillna("")
-            sample_address = ", ".join([str(sample_row[col]) for col in address_columns])
-            if country_suffix:
-                sample_address += f", {country_suffix}"
-            st.info(f"**Example Address:** {sample_address}")
-            
-            # --- 4. The Geocoding Engine ---
-            if st.button("🚀 Start Geocoding (Takes ~3 minutes for 170 rows)", type="primary"):
-                geolocator = Nominatim(user_agent="asepeyo_netzero_intern")
-                
-                # Setup progress tracking
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                success_count = 0
-                fail_count = 0
-                
-                latitudes = []
-                longitudes = []
-                full_addresses = []
-                
-                # Loop through every row
-                for index, row in df.iterrows():
-                    # Build the address string
-                    parts = [str(row[col]) for col in address_columns if pd.notna(row[col])]
-                    address = ", ".join(parts)
-                    if country_suffix:
-                        address += f", {country_suffix}"
-                    
-                    full_addresses.append(address)
-                    
-                    try:
-                        # Request coordinates
-                        location = geolocator.geocode(address, timeout=10)
-                        
-                        if location:
-                            latitudes.append(location.latitude)
-                            longitudes.append(location.longitude)
-                            success_count += 1
-                        else:
-                            latitudes.append(None)
-                            longitudes.append(None)
-                            fail_count += 1
-                            
-                    except Exception as e:
-                        latitudes.append(None)
-                        longitudes.append(None)
-                        fail_count += 1
-                    
-                    # MANDATORY 1-second sleep to respect OpenStreetMap's free server policy
-                    time.sleep(1)
-                    
-                    # Update UI
-                    progress = (index + 1) / len(df)
-                    progress_bar.progress(progress)
-                    status_text.text(f"Processing row {index + 1}/{len(df)}... (Found: {success_count}, Failed: {fail_count})")
-                
-                # --- 5. Wrap up and Download ---
-                df['Full_Search_Address'] = full_addresses
-                df['Latitude'] = latitudes
-                df['Longitude'] = longitudes
-                
-                st.success(f"✅ Geocoding Complete! Successfully mapped {success_count} centers. Could not find {fail_count} centers.")
-                st.dataframe(df[['Name', 'Full_Search_Address', 'Latitude', 'Longitude']].head(10))
-                
-                # Generate Download
-                csv_data = df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="⬇️ Download Final CSV with Coordinates",
-                    data=csv_data,
-                    file_name='Asepeyo_Centers_Geocoded.csv',
-                    mime='text/csv'
-                )
-                
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
