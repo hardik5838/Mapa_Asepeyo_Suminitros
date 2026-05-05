@@ -2,4 +2,5 @@ streamlit
 pandas
 folium
 streamlit-folium
-time
+geopy
+openpyxl
