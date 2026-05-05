@@ -14,9 +14,18 @@ st.markdown("Upload your raw Electricidad CSV. The app will automatically find t
 uploaded_file = st.file_uploader("Upload your 'Electricidad...csv' file here", type=['csv'])
 
 if uploaded_file is not None:
-    # Read the file, skipping the two blank title rows at the top
-    df = pd.read_csv(uploaded_file, skiprows=2)
+    # Read the file normally first (assuming headers are on the first row)
+    df = pd.read_csv(uploaded_file)
     
+    # Check if 'Centre' column exists. If not, it might be the old format with 2 blank rows.
+    if 'Centre' not in df.columns:
+        uploaded_file.seek(0) # Reset the file pointer
+        df = pd.read_csv(uploaded_file, skiprows=2)
+        
+    if 'Centre' not in df.columns:
+        st.error("⚠️ Could not find the 'Centre' column. Please check your CSV format.")
+        st.stop()
+        
     # We only want rows that are actually centers (drop empty rows)
     df = df.dropna(subset=['Centre'])
     
