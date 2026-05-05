@@ -1,86 +1,121 @@
 import streamlit as st
 import pandas as pd
-import folium
-from streamlit_folium import st_folium
+from geopy.geocoders import Nominatim
+import time
 
-# 1. Page Configuration
-st.set_page_config(page_title="Asepeyo Net Zero Map", layout="wide")
-st.title("Asepeyo Center Infrastructure & Energy Map")
+st.set_page_config(page_title="Asepeyo Batch Geocoder", page_icon="📍", layout="wide")
 
-# 2. Data Loading
-@st.cache_data
-def load_data():
-    # Replace with your actual file path: pd.read_csv("asepeyo_centers.csv")
-    # Using dummy data for demonstration
-    data = {
-        'Center_Name': ['Vía Augusta 36', 'Vía Augusta 18', 'Coslada Hospital'],
-        'Latitude': [41.3985, 41.3970, 40.4259],
-        'Longitude': [2.1524, 2.1510, -3.5643],
-        'CUPS': ['ES1234', 'ES5678', 'ES9012'],
-        'Energy_Rating': ['B', 'C', 'A'],
-        'Dist_Elec': ['Endesa', 'Iberdrola', 'Iberdrola'],
-        'Dist_Gas': ['Nedgia', 'Redexis', 'Madrileña Red de Gas']
-    }
-    return pd.DataFrame(data)
+st.title("📍 Asepeyo Batch Geocoder")
+st.markdown("Upload your electricity/supply CSV, and this tool will automatically find the Latitude and Longitude for every center.")
 
-df = load_data()
+# --- 1. File Upload ---
+uploaded_file = st.file_uploader("Upload your CSV or Excel file", type=['csv', 'xlsx'])
 
-# 3. Top Level Filters
-st.header("Filter Centers")
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    elec_filter = st.multiselect("Electricity Distributor", df['Dist_Elec'].unique())
-with col2:
-    gas_filter = st.multiselect("Gas Distributor", df['Dist_Gas'].unique())
-with col3:
-    rating_filter = st.multiselect("Energy Rating", df['Energy_Rating'].unique())
-
-# Apply filters to dataframe
-filtered_df = df.copy()
-if elec_filter:
-    filtered_df = filtered_df[filtered_df['Dist_Elec'].isin(elec_filter)]
-if gas_filter:
-    filtered_df = filtered_df[filtered_df['Dist_Gas'].isin(gas_filter)]
-if rating_filter:
-    filtered_df = filtered_df[filtered_df['Energy_Rating'].isin(rating_filter)]
-
-# 4. Interactive Map Configuration
-st.header("Interactive Map")
-# Center the map on Spain
-m = folium.Map(location=[40.4637, -3.7492], zoom_start=6)
-
-# Add markers to the map
-for idx, row in filtered_df.iterrows():
-    # HTML formatting for the popup
-    popup_info = f"""
-    <b>{row['Center_Name']}</b><br>
-    <b>CUPS:</b> {row['CUPS']}<br>
-    <b>Rating:</b> {row['Energy_Rating']}<br>
-    <b>Elec:</b> {row['Dist_Elec']}<br>
-    <b>Gas:</b> {row['Dist_Gas']}
-    """
-    folium.Marker(
-        location=[row['Latitude'], row['Longitude']],
-        popup=folium.Popup(popup_info, max_width=300),
-        tooltip=row['Center_Name'],
-        icon=folium.Icon(color="blue", icon="info-sign")
-    ).add_to(m)
-
-# To add Distributor Regions, you would load a GeoJSON here using folium.GeoJson()
-
-# Render map in Streamlit
-st_folium(m, width=1200, height=600)
-
-# 5. Data Table and Export
-st.header("Center Data")
-st.dataframe(filtered_df, use_container_width=True)
-
-# Generate CSV for download
-csv = filtered_df.to_csv(index=False).encode('utf-8')
-st.download_button(
-    label="Download filtered data as CSV",
-    data=csv,
-    file_name='asepeyo_filtered_centers.csv',
-    mime='text/csv',
-)
+if uploaded_file is not None:
+    # --- 2. Data Loading & Cleaning ---
+    # Your specific CSV has 2 empty rows at the top before the real header
+    skip_rows = st.number_input("Rows to skip at top of file (Set to 2 for your Electricidad CSV)", min_value=0, value=2)
+    
+    try:
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file, skiprows=skip_rows)
+        else:
+            df = pd.read_excel(uploaded_file, skiprows=skip_rows)
+            
+        st.success("File loaded successfully!")
+        st.write("Preview of your data:")
+        st.dataframe(df.head(3))
+        
+        # --- 3. Address Configuration ---
+        st.subheader("⚙️ Configure Address Format")
+        st.markdown("Select the columns that make up the full address. The tool will combine them.")
+        
+        # Try to auto-detect columns based on the Asepeyo file structure
+        all_columns = df.columns.tolist()
+        default_cols = [col for col in ['Dirección Suministro', 'CP', 'Provincia'] if col in all_columns]
+        
+        address_columns = st.multiselect(
+            "Select columns to build the address:",
+            options=all_columns,
+            default=default_cols
+        )
+        
+        country_suffix = st.text_input("Add a fixed suffix to help the map engine find it:", value="Spain")
+        
+        if address_columns:
+            # Show an example of how the address will look
+            sample_row = df.iloc[0].fillna("")
+            sample_address = ", ".join([str(sample_row[col]) for col in address_columns])
+            if country_suffix:
+                sample_address += f", {country_suffix}"
+            st.info(f"**Example Address:** {sample_address}")
+            
+            # --- 4. The Geocoding Engine ---
+            if st.button("🚀 Start Geocoding (Takes ~3 minutes for 170 rows)", type="primary"):
+                geolocator = Nominatim(user_agent="asepeyo_netzero_intern")
+                
+                # Setup progress tracking
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                success_count = 0
+                fail_count = 0
+                
+                latitudes = []
+                longitudes = []
+                full_addresses = []
+                
+                # Loop through every row
+                for index, row in df.iterrows():
+                    # Build the address string
+                    parts = [str(row[col]) for col in address_columns if pd.notna(row[col])]
+                    address = ", ".join(parts)
+                    if country_suffix:
+                        address += f", {country_suffix}"
+                    
+                    full_addresses.append(address)
+                    
+                    try:
+                        # Request coordinates
+                        location = geolocator.geocode(address, timeout=10)
+                        
+                        if location:
+                            latitudes.append(location.latitude)
+                            longitudes.append(location.longitude)
+                            success_count += 1
+                        else:
+                            latitudes.append(None)
+                            longitudes.append(None)
+                            fail_count += 1
+                            
+                    except Exception as e:
+                        latitudes.append(None)
+                        longitudes.append(None)
+                        fail_count += 1
+                    
+                    # MANDATORY 1-second sleep to respect OpenStreetMap's free server policy
+                    time.sleep(1)
+                    
+                    # Update UI
+                    progress = (index + 1) / len(df)
+                    progress_bar.progress(progress)
+                    status_text.text(f"Processing row {index + 1}/{len(df)}... (Found: {success_count}, Failed: {fail_count})")
+                
+                # --- 5. Wrap up and Download ---
+                df['Full_Search_Address'] = full_addresses
+                df['Latitude'] = latitudes
+                df['Longitude'] = longitudes
+                
+                st.success(f"✅ Geocoding Complete! Successfully mapped {success_count} centers. Could not find {fail_count} centers.")
+                st.dataframe(df[['Name', 'Full_Search_Address', 'Latitude', 'Longitude']].head(10))
+                
+                # Generate Download
+                csv_data = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="⬇️ Download Final CSV with Coordinates",
+                    data=csv_data,
+                    file_name='Asepeyo_Centers_Geocoded.csv',
+                    mime='text/csv'
+                )
+                
+    except Exception as e:
+        st.error(f"Error reading file: {e}")
