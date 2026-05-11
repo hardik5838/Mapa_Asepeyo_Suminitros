@@ -70,6 +70,30 @@ st.header("Interactive Map")
 # Center the map on Spain
 m = folium.Map(location=[40.4637, -3.7492], zoom_start=6)
 
+# --- Add Distributor Regional Masks (Translucent Layer) ---
+distributors = filtered_df['Distribuidora Eléctrica'].dropna().unique() if 'Distribuidora Eléctrica' in filtered_df.columns else []
+for dist in distributors:
+    # Each distributor gets its own toggleable layer
+    dist_layer = folium.FeatureGroup(name=f"Zona: {dist}", show=True) 
+    dist_color = get_dist_color(dist)
+    dist_data = filtered_df[filtered_df['Distribuidora Eléctrica'] == dist]
+    
+    for _, row in dist_data.iterrows():
+        if pd.notna(row.get('Latitude')) and pd.notna(row.get('Longitude')):
+            folium.Circle(
+                location=[row['Latitude'], row['Longitude']],
+                radius=45000, # 45km radius to visually merge nearby regions
+                color=None,
+                fill=True,
+                fill_color=dist_color,
+                fill_opacity=0.25,
+                tooltip=f"Distributor: {dist}"
+            ).add_to(dist_layer)
+    dist_layer.add_to(m)
+
+# --- Add Center Markers ---
+pins_layer = folium.FeatureGroup(name="📍 Centers (Energy Rating)", show=True)
+
 # Add markers to the map
 for idx, row in filtered_df.iterrows():
     
@@ -89,11 +113,16 @@ for idx, row in filtered_df.iterrows():
             location=[row['Latitude'], row['Longitude']],
             popup=folium.Popup(popup_info, max_width=300),
             tooltip=row.get('Centre', 'Asepeyo Center'),
-            icon=folium.Icon(color="blue", icon="info-sign")
-        ).add_to(m)
+            icon=folium.Icon(color=get_rating_color(row.get('Energy Rating')), icon="info-sign")
+        ).add_to(pins_layer)
 
-# Render map in Streamlit
-st_folium(m, width=1200, height=600)
+pins_layer.add_to(m)
+
+# Add layer control menu to the top right of the map
+folium.LayerControl(position='topright', collapsed=False).add_to(m)
+
+# Render map in Streamlit (returned_objects=[] speeds up the app significantly)
+st_folium(m, width=1200, height=600, returned_objects=[])
 
 # 5. Data Table and Export
 st.header("Center Data")
