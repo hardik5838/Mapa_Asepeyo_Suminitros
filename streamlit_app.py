@@ -10,26 +10,35 @@ st.title("Asepeyo Center Infrastructure & Energy Map")
 # 2. Data Loading (Fetching from GitHub)
 @st.cache_data
 def load_data():
-    # IMPORTANT: Replace this URL with the RAW link to your data.csv on GitHub
-    # Example format: "https://raw.githubusercontent.com/username/repository/main/data.csv"
+    # URL to the RAW data on GitHub
     github_url = "https://raw.githubusercontent.com/hardik5838/Mapa_Asepeyo_Suminitros/refs/heads/main/data.csv"
     
     try:
         # Attempt to read the CSV directly from the GitHub repository
         df = pd.read_csv(github_url)
+        
+        # --- CRITICAL FIX: Parse 'Geo-Loaction' into Latitude and Longitude ---
+        # The map needs separate math coordinates, but the CSV has "Lat, Lon" in one string
+        if 'Geo-Loaction' in df.columns:
+            # Split the string by the comma
+            coords = df['Geo-Loaction'].astype(str).str.split(',', expand=True)
+            if coords.shape[1] >= 2:
+                # Convert the split text into decimal numbers
+                df['Latitude'] = pd.to_numeric(coords[0], errors='coerce')
+                df['Longitude'] = pd.to_numeric(coords[1], errors='coerce')
+                
         return df
         
     except Exception as e:
-        # Fallback to dummy data if the GitHub link isn't set up yet or is private
-        st.warning(f"⚠️ Could not load from GitHub yet. Please update the `github_url` variable. Showing sample data for now.")
+        # Fallback to dummy data if the GitHub link fails
+        st.warning(f"⚠️ Could not load from GitHub. Error: {e}")
         data = {
-            'Center_Name': ['Vía Augusta 36', 'Vía Augusta 18', 'Coslada Hospital'],
+            'Centre': ['Vía Augusta 36', 'Vía Augusta 18', 'Coslada Hospital'],
             'Latitude': [41.3985, 41.3970, 40.4259],
             'Longitude': [2.1524, 2.1510, -3.5643],
-            'CUPS': ['ES1234', 'ES5678', 'ES9012'],
-            'Energy_Rating': ['B', 'C', 'A'],
-            'Dist_Elec': ['Endesa', 'Iberdrola', 'Iberdrola'],
-            'Dist_Gas': ['Nedgia', 'Redexis', 'Madrileña Red de Gas']
+            'CUPs': ['ES1234', 'ES5678', 'ES9012'],
+            'Energy Rating': ['B', 'C', 'A'],
+            'Distribuidora Eléctrica': ['Endesa', 'Iberdrola', 'Iberdrola']
         }
         return pd.DataFrame(data)
 
@@ -39,22 +48,22 @@ df = load_data()
 st.header("Filter Centers")
 col1, col2, col3 = st.columns(3)
 
-# Added error handling in case the CSV doesn't match the exact column names yet
+# Filter using the exact column names from your Spanish CSV
 with col1:
-    elec_filter = st.multiselect("Electricity Distributor", df['Dist_Elec'].unique() if 'Dist_Elec' in df.columns else [])
+    elec_filter = st.multiselect("Electricity Distributor", df['Distribuidora Eléctrica'].dropna().unique() if 'Distribuidora Eléctrica' in df.columns else [])
 with col2:
-    gas_filter = st.multiselect("Gas Distributor", df['Dist_Gas'].unique() if 'Dist_Gas' in df.columns else [])
+    comunidad_filter = st.multiselect("Region (Comunidad)", df['Comunidad'].dropna().unique() if 'Comunidad' in df.columns else [])
 with col3:
-    rating_filter = st.multiselect("Energy Rating", df['Energy_Rating'].unique() if 'Energy_Rating' in df.columns else [])
+    rating_filter = st.multiselect("Energy Rating", df['Energy Rating'].dropna().unique() if 'Energy Rating' in df.columns else [])
 
 # Apply filters to dataframe
 filtered_df = df.copy()
 if elec_filter:
-    filtered_df = filtered_df[filtered_df['Dist_Elec'].isin(elec_filter)]
-if gas_filter:
-    filtered_df = filtered_df[filtered_df['Dist_Gas'].isin(gas_filter)]
+    filtered_df = filtered_df[filtered_df['Distribuidora Eléctrica'].isin(elec_filter)]
+if comunidad_filter:
+    filtered_df = filtered_df[filtered_df['Comunidad'].isin(comunidad_filter)]
 if rating_filter:
-    filtered_df = filtered_df[filtered_df['Energy_Rating'].isin(rating_filter)]
+    filtered_df = filtered_df[filtered_df['Energy Rating'].isin(rating_filter)]
 
 # 4. Interactive Map Configuration
 st.header("Interactive Map")
@@ -63,32 +72,34 @@ m = folium.Map(location=[40.4637, -3.7492], zoom_start=6)
 
 # Add markers to the map
 for idx, row in filtered_df.iterrows():
-    # Use .get() to safely pull data in case column names vary slightly in your live CSV
-    popup_info = f"""
-    <b>{row.get('Center_Name', 'Unknown')}</b><br>
-    <b>CUPS:</b> {row.get('CUPS', 'N/A')}<br>
-    <b>Rating:</b> {row.get('Energy_Rating', 'N/A')}<br>
-    <b>Elec:</b> {row.get('Dist_Elec', 'N/A')}<br>
-    <b>Gas:</b> {row.get('Dist_Gas', 'N/A')}
-    """
     
-    # Only map rows that actually have coordinates
+    # Check if the row actually has valid numbers for Latitude and Longitude
     if pd.notna(row.get('Latitude')) and pd.notna(row.get('Longitude')):
+        
+        # HTML formatting for the popup (Using real column names like 'Centre' and 'CUPs')
+        popup_info = f"""
+        <b>{row.get('Centre', 'Unknown')}</b><br>
+        <b>CUPS:</b> {row.get('CUPs', 'N/A')}<br>
+        <b>Rating:</b> {row.get('Energy Rating', 'N/A')}<br>
+        <b>Audit:</b> {row.get('Audit Status', 'N/A')}<br>
+        <b>Distributor:</b> {row.get('Distribuidora Eléctrica', 'N/A')}
+        """
+        
         folium.Marker(
             location=[row['Latitude'], row['Longitude']],
             popup=folium.Popup(popup_info, max_width=300),
-            tooltip=row.get('Center_Name', 'Asepeyo Center'),
+            tooltip=row.get('Centre', 'Asepeyo Center'),
             icon=folium.Icon(color="blue", icon="info-sign")
         ).add_to(m)
-
-# To add Distributor Regions, you would load a GeoJSON here using folium.GeoJson()
 
 # Render map in Streamlit
 st_folium(m, width=1200, height=600)
 
 # 5. Data Table and Export
 st.header("Center Data")
-st.dataframe(filtered_df, use_container_width=True)
+# Hide the raw latitude/longitude columns from the table to keep it clean
+display_df = filtered_df.drop(columns=['Latitude', 'Longitude'], errors='ignore')
+st.dataframe(display_df, use_container_width=True)
 
 # Generate CSV for download
 csv = filtered_df.to_csv(index=False).encode('utf-8')
