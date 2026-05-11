@@ -86,31 +86,46 @@ st.header("Interactive Map")
 # Center the map on Spain
 m = folium.Map(location=[40.4637, -3.7492], zoom_start=6, tiles="CartoDB positron")
 
-# Layer 1: Distributor Regional Masks (Translucent Layer)
-distributors = filtered_df['Distribuidora Eléctrica'].dropna().unique() if 'Distribuidora Eléctrica' in filtered_df.columns else []
+# Layer 1: Distributor Regional Masks (Grouped into Big 3 + Others)
+mask_layers = {
+    'Endesa': folium.FeatureGroup(name="Zona: e-distribución (Endesa)", show=True),
+    'Iberdrola': folium.FeatureGroup(name="Zona: i-DE (Iberdrola)", show=True),
+    'Naturgy': folium.FeatureGroup(name="Zona: UFD (Naturgy)", show=True),
+    'Others': folium.FeatureGroup(name="Zona: Otras", show=True)
+}
 
-for dist in distributors:
-    # Each distributor gets its own toggleable layer
-    dist_layer = folium.FeatureGroup(name=f"Zona: {dist}", show=True) 
-    dist_color = get_dist_color(dist)
-    dist_data = filtered_df[filtered_df['Distribuidora Eléctrica'] == dist]
-    
-    for _, row in dist_data.iterrows():
-        if pd.notna(row.get('Latitude')) and pd.notna(row.get('Longitude')):
-            # The 45km radius creates the overlapping regional mask / small islands effect
-            folium.Circle(
-                location=[row['Latitude'], row['Longitude']],
-                radius=45000, 
-                color=None,
-                fill=True,
-                fill_color=dist_color,
-                fill_opacity=0.25,
-                tooltip=f"Distributor: {dist}"
-            ).add_to(dist_layer)
-    dist_layer.add_to(m)
+for idx, row in filtered_df.iterrows():
+    if pd.notna(row.get('Latitude')) and pd.notna(row.get('Longitude')):
+        dist = str(row.get('Distribuidora Eléctrica', 'Unknown'))
+        dist_lower = dist.lower()
+        
+        # Route the center to the correct concise layer group
+        if 'endesa' in dist_lower:
+            layer_group = mask_layers['Endesa']
+        elif 'iberdrola' in dist_lower:
+            layer_group = mask_layers['Iberdrola']
+        elif 'naturgy' in dist_lower:
+            layer_group = mask_layers['Naturgy']
+        else:
+            layer_group = mask_layers['Others']
+            
+        # The 45km radius creates the overlapping regional mask / small islands effect
+        folium.Circle(
+            location=[row['Latitude'], row['Longitude']],
+            radius=45000, 
+            color=None,
+            fill=True,
+            fill_color=get_dist_color(dist),
+            fill_opacity=0.25,
+            tooltip=f"Distributor: {dist}"
+        ).add_to(layer_group)
 
-# Layer 2: Center Markers (Colored by Energy Rating)
-pins_layer = folium.FeatureGroup(name="📍 Centers (Energy Rating)", show=True)
+# Add grouped mask layers to the map
+for layer in mask_layers.values():
+    layer.add_to(m)
+
+# Layer 2: Center Markers (Smaller, compact points colored by Energy Rating)
+pins_layer = folium.FeatureGroup(name="📍 Mostrar/Ocultar Puntos", show=True)
 
 for idx, row in filtered_df.iterrows():
     if pd.notna(row.get('Latitude')) and pd.notna(row.get('Longitude')):
@@ -131,17 +146,23 @@ for idx, row in filtered_df.iterrows():
         </div>
         """
         
-        folium.Marker(
+        # Replaced bulky Marker with compact CircleMarker for a cleaner look
+        folium.CircleMarker(
             location=[row['Latitude'], row['Longitude']],
+            radius=6,
+            color="white",
+            weight=1,
+            fill=True,
+            fill_color=pin_color,
+            fill_opacity=1.0,
             popup=folium.Popup(popup_info, max_width=300),
-            tooltip=row.get('Centre', 'Asepeyo Center'),
-            icon=folium.Icon(color=pin_color, icon="info-sign")
+            tooltip=row.get('Centre', 'Asepeyo Center')
         ).add_to(pins_layer)
 
 pins_layer.add_to(m)
 
-# Add layer control menu to the top right of the map
-folium.LayerControl(position='topright', collapsed=False).add_to(m)
+# Add layer control menu (Collapsed to prevent blocking the map!)
+folium.LayerControl(position='topright', collapsed=True).add_to(m)
 
 # Render map in Streamlit (returned_objects=[] speeds up the app significantly)
 st_folium(m, width=1200, height=650, returned_objects=[])
