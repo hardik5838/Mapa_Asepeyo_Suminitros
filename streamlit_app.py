@@ -133,6 +133,8 @@ for idx, row in filtered_df.iterrows():
         # Determine the color based on the Energy Rating
         rating_val = row.get('Energy Rating', 'Pending')
         pin_color = get_rating_color(rating_val)
+        gmaps_link = f"https://www.google.com/maps/search/?api=1&query={row['Latitude']},{row['Longitude']}"
+
         
         # HTML formatting for the popup
         popup_info = f"""
@@ -143,6 +145,7 @@ for idx, row in filtered_df.iterrows():
             <b>Rating:</b> <span style="background-color: {pin_color}; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;">{rating_val}</span><br>
             <b>Audit:</b> {row.get('Audit Status', 'N/A')}<br>
             <b>Distributor:</b> {row.get('Distribuidora Eléctrica', 'N/A')}
+            <a href="{gmaps_link}" target="_blank" style="text-decoration: none; color: #0056b3; font-weight: bold;">📍 Open in Google Maps</a>
         </div>
         """
         
