@@ -3,35 +3,52 @@ import pandas as pd
 import folium
 from streamlit_folium import st_folium
 
-# 1. Page Configuration
+# --- 1. Page Configuration ---
 st.set_page_config(page_title="Asepeyo Net Zero Map", layout="wide")
 st.title("Asepeyo Center Infrastructure & Energy Map")
 
-# 2. Data Loading (Fetching from GitHub)
+# --- 2. Color Mapping Functions ---
+def get_rating_color(rating):
+    """Maps energy ratings to Folium marker colors (Red to Green spectrum)"""
+    rating = str(rating).strip().upper()
+    colors = {
+        'A': 'darkgreen', 'B': 'green', 'C': 'lightgreen', 
+        'D': 'orange', 'E': 'lightred', 'F': 'red', 'G': 'darkred'
+    }
+    return colors.get(rating, 'gray')
+
+def get_dist_color(dist):
+    """Maps specific distributors to hex colors for the translucent layer"""
+    dist = str(dist).lower()
+    if 'endesa' in dist: return '#0056b3'    # Deep Blue
+    if 'iberdrola' in dist: return '#28a745' # Forest Green
+    if 'naturgy' in dist: return '#fd7e14'   # Orange
+    if 'edp' in dist: return '#dc3545'       # Red
+    if 'viesgo' in dist: return '#6f42c1'    # Purple
+    if 'gaselec' in dist: return '#20c997'   # Teal
+    return '#adb5bd'                         # Default Grey
+
+# --- 3. Data Loading (Fetching from GitHub) ---
 @st.cache_data
 def load_data():
     # URL to the RAW data on GitHub
     github_url = "https://raw.githubusercontent.com/hardik5838/Mapa_Asepeyo_Suminitros/refs/heads/main/data.csv"
     
     try:
-        # Attempt to read the CSV directly from the GitHub repository
         df = pd.read_csv(github_url)
         
-        # --- CRITICAL FIX: Parse 'Geo-Loaction' into Latitude and Longitude ---
-        # The map needs separate math coordinates, but the CSV has "Lat, Lon" in one string
+        # Parse 'Geo-Loaction' into separate Latitude and Longitude columns
         if 'Geo-Loaction' in df.columns:
-            # Split the string by the comma
             coords = df['Geo-Loaction'].astype(str).str.split(',', expand=True)
             if coords.shape[1] >= 2:
-                # Convert the split text into decimal numbers
                 df['Latitude'] = pd.to_numeric(coords[0], errors='coerce')
                 df['Longitude'] = pd.to_numeric(coords[1], errors='coerce')
                 
         return df
         
     except Exception as e:
-        # Fallback to dummy data if the GitHub link fails
         st.warning(f"⚠️ Could not load from GitHub. Error: {e}")
+        # Dummy data fallback
         data = {
             'Centre': ['Vía Augusta 36', 'Vía Augusta 18', 'Coslada Hospital'],
             'Latitude': [41.3985, 41.3970, 40.4259],
@@ -44,11 +61,10 @@ def load_data():
 
 df = load_data()
 
-# 3. Top Level Filters
+# --- 4. Top Level Filters ---
 st.header("Filter Centers")
 col1, col2, col3 = st.columns(3)
 
-# Filter using the exact column names from your Spanish CSV
 with col1:
     elec_filter = st.multiselect("Electricity Distributor", df['Distribuidora Eléctrica'].dropna().unique() if 'Distribuidora Eléctrica' in df.columns else [])
 with col2:
@@ -65,13 +81,14 @@ if comunidad_filter:
 if rating_filter:
     filtered_df = filtered_df[filtered_df['Energy Rating'].isin(rating_filter)]
 
-# 4. Interactive Map Configuration
+# --- 5. Interactive Map Configuration ---
 st.header("Interactive Map")
 # Center the map on Spain
-m = folium.Map(location=[40.4637, -3.7492], zoom_start=6)
+m = folium.Map(location=[40.4637, -3.7492], zoom_start=6, tiles="CartoDB positron")
 
-# --- Add Distributor Regional Masks (Translucent Layer) ---
+# Layer 1: Distributor Regional Masks (Translucent Layer)
 distributors = filtered_df['Distribuidora Eléctrica'].dropna().unique() if 'Distribuidora Eléctrica' in filtered_df.columns else []
+
 for dist in distributors:
     # Each distributor gets its own toggleable layer
     dist_layer = folium.FeatureGroup(name=f"Zona: {dist}", show=True) 
@@ -80,9 +97,10 @@ for dist in distributors:
     
     for _, row in dist_data.iterrows():
         if pd.notna(row.get('Latitude')) and pd.notna(row.get('Longitude')):
+            # The 45km radius creates the overlapping regional mask / small islands effect
             folium.Circle(
                 location=[row['Latitude'], row['Longitude']],
-                radius=45000, # 45km radius to visually merge nearby regions
+                radius=45000, 
                 color=None,
                 fill=True,
                 fill_color=dist_color,
@@ -91,29 +109,33 @@ for dist in distributors:
             ).add_to(dist_layer)
     dist_layer.add_to(m)
 
-# --- Add Center Markers ---
+# Layer 2: Center Markers (Colored by Energy Rating)
 pins_layer = folium.FeatureGroup(name="📍 Centers (Energy Rating)", show=True)
 
-# Add markers to the map
 for idx, row in filtered_df.iterrows():
-    
-    # Check if the row actually has valid numbers for Latitude and Longitude
     if pd.notna(row.get('Latitude')) and pd.notna(row.get('Longitude')):
         
-        # HTML formatting for the popup (Using real column names like 'Centre' and 'CUPs')
+        # Determine the color based on the Energy Rating
+        rating_val = row.get('Energy Rating', 'Pending')
+        pin_color = get_rating_color(rating_val)
+        
+        # HTML formatting for the popup
         popup_info = f"""
-        <b>{row.get('Centre', 'Unknown')}</b><br>
-        <b>CUPS:</b> {row.get('CUPs', 'N/A')}<br>
-        <b>Rating:</b> {row.get('Energy Rating', 'N/A')}<br>
-        <b>Audit:</b> {row.get('Audit Status', 'N/A')}<br>
-        <b>Distributor:</b> {row.get('Distribuidora Eléctrica', 'N/A')}
+        <div style="font-family: Arial, sans-serif; min-width: 220px;">
+            <h4 style="margin-bottom: 5px; color: #004b87;">{row.get('Centre', 'Unknown')}</h4>
+            <hr style="margin: 5px 0;">
+            <b>CUPS:</b> {row.get('CUPs', 'N/A')}<br>
+            <b>Rating:</b> <span style="background-color: {pin_color}; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;">{rating_val}</span><br>
+            <b>Audit:</b> {row.get('Audit Status', 'N/A')}<br>
+            <b>Distributor:</b> {row.get('Distribuidora Eléctrica', 'N/A')}
+        </div>
         """
         
         folium.Marker(
             location=[row['Latitude'], row['Longitude']],
             popup=folium.Popup(popup_info, max_width=300),
             tooltip=row.get('Centre', 'Asepeyo Center'),
-            icon=folium.Icon(color=get_rating_color(row.get('Energy Rating')), icon="info-sign")
+            icon=folium.Icon(color=pin_color, icon="info-sign")
         ).add_to(pins_layer)
 
 pins_layer.add_to(m)
@@ -122,9 +144,9 @@ pins_layer.add_to(m)
 folium.LayerControl(position='topright', collapsed=False).add_to(m)
 
 # Render map in Streamlit (returned_objects=[] speeds up the app significantly)
-st_folium(m, width=1200, height=600, returned_objects=[])
+st_folium(m, width=1200, height=650, returned_objects=[])
 
-# 5. Data Table and Export
+# --- 6. Data Table and Export ---
 st.header("Center Data")
 # Hide the raw latitude/longitude columns from the table to keep it clean
 display_df = filtered_df.drop(columns=['Latitude', 'Longitude'], errors='ignore')
