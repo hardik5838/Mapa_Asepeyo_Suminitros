@@ -165,7 +165,7 @@ for idx, row in filtered_df.iterrows():
 pins_layer.add_to(m)
 
 # Add layer control menu (Collapsed to prevent blocking the map!)
-folium.LayerControl(position='topright', collapsed=True).add_to(m)
+folium.LayerControl(position='topleft', collapsed=False).add_to(m)
 
 # Render map in Streamlit (returned_objects=[] speeds up the app significantly)
 st_folium(m, width=1200, height=650, returned_objects=[])
